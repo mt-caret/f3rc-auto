@@ -6,7 +6,6 @@
 #include <cmath>
 #include <algorithm>
 
-
 /// 手動機・自動機共有部分
 Serial pc(USBTX, USBRX);
 
@@ -149,6 +148,140 @@ void get_sensor(void) {
    }
 }
 
+volatile bool kill_flag = false;
+void check_kill_switch(void) {
+  if (false && !kill_flag) { //<- ここに緊急停止条件
+    kill_flag = true;
+    backlight_toggler.attach(&backlight_toggle, 1.0f);
+  }
+}
+Ticker kill_switch_watcher;
+void initialize_kill_switch(void) {
+  kill_switch_watcher.attach(&check_kill_switch, 0.1f);
+}
+void kill(void) {
+  lcd.cls();
+  lcd.locate(0, 0);
+  lcd.printf("killed.");
+}
+
+void test_move(void) {
+  while (true) {
+    motor[0][0].write(1.0);
+    motor[1][1].write(1.0);
+    motor[2][1].write(1.0);
+    motor[3][0].write(1.0);
+    wait(1);
+    repeat_buzz(0.05, 1);
+    motor[0][0].write(0.0);
+    motor[1][1].write(0.0);
+    motor[2][1].write(0.0);
+    motor[3][0].write(0.0);
+    wait(3);
+    motor[0][1].write(1.0);
+    motor[1][0].write(1.0);
+    motor[2][0].write(1.0);
+    motor[3][1].write(1.0);
+    wait(1);
+    motor[0][1].write(0.0);
+    motor[1][0].write(0.0);
+    motor[2][0].write(0.0);
+    motor[3][1].write(0.0);
+    wait(3);
+  }
+}
+void test_sensor(void) {
+  while (true) {
+    lcd2.printf(0, "Ch0");    // line# (0 or 1), string
+    lcd2.printf(1, "%f", sensor[0].read_input(0));
+    wait(1);
+    lcd2.clear();
+  }
+}
+void test_pid(void) {
+  while (true) {
+    get_sensor();
+    // float pv = (1.0 - (sensor_value[0][0] * 0.35 + sensor_value[0][1] * 0.25 + sensor_value[0][2] * 0.15 + sensor_value[0][3] * 0.05)) * -1 + (1.0 - (sensor_value[0][7] * 0.35 + sensor_value[0][6] * 0.25 + sensor_value[0][5] * 0.15 + sensor_value[0][4] * 0.05));
+    float pv = (1.0 - (sensor_value[0][0] * 70 + sensor_value[0][1] * 10 + sensor_value[0][2] * 6 + sensor_value[0][3] * 2)) * -1 + (1.0 - (sensor_value[0][7] * 70 + sensor_value[0][6] * 10 + sensor_value[0][5] * 6 + sensor_value[0][4] * 2));
+    //for(int i = 0; i < 4; i++) {
+    //  float data = 1.0 - sensor[i].read();
+    //  pc.printf("%f ", data);
+    //  pv += data * weight[i];
+    //}
+    controller.setProcessValue(pv);
+    float co = controller.compute();
+    lcd.locate(0,0);
+    pc.printf("pv:  %f, co: %f : %f\n\r", pv, co, 1.0-co);
+    lcd.printf("pv: %.3f", pv);
+    lcd.locate(0,1);
+    lcd.printf("co: %.3f, %.3f", co, 1.0-co);
+    lcd2.printf(0, "Ch0\r");    // line# (0 or 1), string
+    lcd2.printf(1, "%f", sensor_value[0][0]);
+    // motor[1][0].write(co/**0.5*/);
+    // motor[0][0].write((1.0-co)/**0.5*/);
+    motor[0][0].write(co);
+    motor[1][1].write(co);
+    motor[2][1].write(1.0 - co);
+    motor[3][0].write(1.0 - co);
+    wait(pid_interval);
+    lcd.cls();
+  }
+}
+void test_compass(void) {
+  while (true) {
+    parse_compass_data();
+    lcd.cls();
+    lcd.locate(0, 0);
+    lcd.printf("x: %04X y: %04X", x, y);
+    lcd.locate(0, 1);
+    lcd.printf("z: %04X", z);
+    wait(1);
+  }
+}
+void mode_select(void) {
+  enum Mode { TEST_MOVE = 0, TEST_SENSOR, TEST_PID, TEST_COMPASS };
+  const int messages_size = 4;
+  const char *messages[messages_size] = {
+    "TEST_MOVE", "TEST_SENSOR", "TEST_PID", "TEST_COMPASS"
+  };
+  Mode mode = TEST_SENSOR;
+  do {
+    lcd.cls();
+    lcd.locate(0, 0);
+    lcd.printf("MODE: ");
+    lcd.printf(messages[(int)mode]);
+    wait(0.1);
+    if (ShieldInput::Up) {
+      mode = (Mode) std::min((int) mode + 1, messages_size - 1);
+    } else if (ShieldInput::Down) {
+      mode = (Mode) std::max((int) mode - 1, 0);
+    }
+  } while (!ShieldInput::Select);
+  repeat_buzz(0.05, (int) mode + 1);
+  wait(1.0);
+  switch (mode) {
+    case TEST_MOVE:
+      test_move();
+      break;
+    case TEST_SENSOR:
+      test_sensor();
+      break;
+    case TEST_PID:
+      test_pid();
+      break;
+    case TEST_COMPASS:
+      test_compass();
+      break;
+    default:
+      //This should not happen!
+      lcd.cls();
+      lcd.locate(0, 0);
+      lcd.printf("!!!NO MODE!!!");
+      wait(10.0);
+      kill();
+      return;
+  }
+}
 void initialize_io(void) {
   pc.baud(19200);
   initialize_buzzer();
@@ -169,100 +302,8 @@ void initialize_io(void) {
   lcd.cls();
   lcd2.clear();
 }
-
 int main() {
   initialize_io();
-
-  enum Mode {TEST_MOVE, TEST_SENSOR, TEST_PID, TEST_COMPASS};
-  int mode = TEST_SENSOR;
-  int time = 0;
-  while (time < 20) {
-    lcd2.printf(0, "mode:%u\r", mode);
-    get_shield_input();
-    mode = (mode + (ShieldInput::Up ? 1 : /*(ShieldInput::Down ? -1 :*/ 0/*)*/)) % 4;
-    time++;
-    wait(0.1);
-  }
-  lcd.cls();
-  lcd2.clear();
-  // state = RUN;
-  switch (mode) {
-    case TEST_MOVE:
-      lcd.printf("TEST_MOVE\r");
-      wait(1);
-      while (1) {
-        motor[0][0].write(1.0);
-        motor[1][1].write(1.0);
-        motor[2][1].write(1.0);
-        motor[3][0].write(1.0);
-        wait(1);
-        repeat_buzz(0.05, 1);
-        motor[0][0].write(0.0);
-        motor[1][1].write(0.0);
-        motor[2][1].write(0.0);
-        motor[3][0].write(0.0);
-        wait(3);
-        motor[0][1].write(1.0);
-        motor[1][0].write(1.0);
-        motor[2][0].write(1.0);
-        motor[3][1].write(1.0);
-        wait(1);
-        motor[0][1].write(0.0);
-        motor[1][0].write(0.0);
-        motor[2][0].write(0.0);
-        motor[3][1].write(0.0);
-        wait(3);
-      }
-      break;
-    case TEST_SENSOR:
-      lcd.printf("TEST_SENSOR\r");
-      wait(1);
-      while(true) {
-        lcd2.printf(0, "Ch0");    // line# (0 or 1), string
-        lcd2.printf(1, "%f", sensor[0].read_input(0));
-        wait(1);
-        lcd2.clear();
-      }
-      break;
-    case TEST_PID:
-      lcd.printf("TEST_PID\r");
-      wait(1);
-      while(true) {
-        get_sensor();
-        // float pv = (1.0 - (sensor_value[0][0] * 0.35 + sensor_value[0][1] * 0.25 + sensor_value[0][2] * 0.15 + sensor_value[0][3] * 0.05)) * -1 + (1.0 - (sensor_value[0][7] * 0.35 + sensor_value[0][6] * 0.25 + sensor_value[0][5] * 0.15 + sensor_value[0][4] * 0.05));
-        float pv = (1.0 - (sensor_value[0][0] * 70 + sensor_value[0][1] * 10 + sensor_value[0][2] * 6 + sensor_value[0][3] * 2)) * -1 + (1.0 - (sensor_value[0][7] * 70 + sensor_value[0][6] * 10 + sensor_value[0][5] * 6 + sensor_value[0][4] * 2));
-        //for(int i = 0; i < 4; i++) {
-        //  float data = 1.0 - sensor[i].read();
-        //  pc.printf("%f ", data);
-        //  pv += data * weight[i];
-        //}
-        controller.setProcessValue(pv);
-        float co = controller.compute();
-        lcd.locate(0,0);
-        pc.printf("pv:  %f, co: %f : %f\n\r", pv, co, 1.0-co);
-        lcd.printf("pv: %.3f", pv);
-        lcd.locate(0,1);
-        lcd.printf("co: %.3f, %.3f", co, 1.0-co);
-        lcd2.printf(0, "Ch0\r");    // line# (0 or 1), string
-        lcd2.printf(1, "%f", sensor_value[0][0]);
-        // motor[1][0].write(co/**0.5*/);
-        // motor[0][0].write((1.0-co)/**0.5*/);
-        motor[0][0].write(co);
-        motor[1][1].write(co);
-        motor[2][1].write(1.0 - co);
-        motor[3][0].write(1.0 - co);
-        wait(pid_interval);
-        lcd.cls();
-      };
-      break;
-    case TEST_COMPASS:
-      lcd.printf("TEST_COMPASS\r");
-      wait(1);
-      while (true) {
-        parse_compass_data();
-        lcd.printf("x: %04X y: %04X z: %04X", x, y, z);
-        wait(1);
-        lcd.cls();
-    }
-  }
+  mode_select();
+  while(true);
 }
