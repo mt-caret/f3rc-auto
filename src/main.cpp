@@ -38,17 +38,6 @@ Ticker backlight_toggler;
 void backlight_toggle(void) {
   backlight.write(!backlight.read());
 }
-volatile bool kill_flag = false;
-void check_kill_switch(void) {
-  if (ShieldInput::Select) {
-    backlight_toggler.attach(&backlight_toggle, 1.0f);
-    kill_flag = true;
-  }
-}
-Ticker kill_switch_ticker;
-void initialize_kill_switch(void) {
-  kill_switch_ticker.attach(&check_kill_switch, 0.1f);
-}
 
 DigitalOut buzzer(PD_2);
 DigitalIn button(USER_BUTTON);
@@ -164,7 +153,6 @@ void initialize_io(void) {
   pc.baud(19200);
   initialize_buzzer();
   initialize_shield();
-  // initialize_kill_switch();
   initialize_motor();
   initialize_compass();
   initialize_pid();
