@@ -248,8 +248,8 @@ void mode_select(void) {
   do {
     lcd.cls();
     lcd.locate(0, 0);
-    lcd.printf("MODE: ");
-    lcd.printf(messages[(int)mode]);
+    lcd.printf("%d: ", (int) mode);
+    lcd.printf(messages[(int) mode]);
     wait(0.1);
     if (ShieldInput::Up) {
       mode = (Mode) std::min((int) mode + 1, messages_size - 1);
